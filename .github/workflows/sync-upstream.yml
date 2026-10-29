@@ -1,0 +1,57 @@
+# Daily: mirror upstream's master from GitLab into this fork's master and
+# open a pull request master -> phosh when phosh lacks upstream commits.
+# Merge it with "Create a merge commit" (not squash or rebase), so master
+# stays an ancestor of phosh. A conflict shows up in the pull request and
+# is resolved by hand on a branch from phosh.
+#
+# The same file is in every fork of the android_translation_layer GitLab
+# group (android_translation_layer, art_standalone, bionic_translation);
+# upstream is found from the repository name. Needs "Allow GitHub Actions
+# to create and approve pull requests" in the repository settings.
+name: Sync upstream
+
+on:
+  schedule:
+    # before aports' update check (03:41), which pins phosh's newest commit
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      UPSTREAM: https://gitlab.com/android_translation_layer/${{ github.event.repository.name }}.git
+    steps:
+      - name: Mirror upstream master
+        run: |
+          new=$(git ls-remote "$UPSTREAM" refs/heads/master | cut -f1)
+          old=$(gh api "repos/$REPO/commits/master" --jq .sha)
+          echo "upstream $new, fork $old"
+          [ -n "$new" ] || { echo "upstream master not found" >&2; exit 1; }
+          [ "$new" != "$old" ] || exit 0
+          git init -q mirror
+          cd mirror
+          git fetch -q --no-tags "$UPSTREAM" master
+          # Not forced: if master was committed to, this fails instead of
+          # dropping the commits.
+          git push -q "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" FETCH_HEAD:refs/heads/master
+
+      - name: Open pull request master -> phosh
+        run: |
+          behind=$(gh api "repos/$REPO/compare/phosh...master" --jq .ahead_by)
+          echo "phosh lacks $behind upstream commits"
+          [ "$behind" -gt 0 ] || exit 0
+          if gh pr list -R "$REPO" --base phosh --head master --state open --json number --jq '.[].number' | grep -q .; then
+            echo "pull request already open"
+            exit 0
+          fi
+          gh pr create -R "$REPO" --base phosh --head master \
+            --title "Merge upstream master" \
+            --body "Brings new upstream commits into \`phosh\` (.github/workflows/sync-upstream.yml). Merge with **Create a merge commit**, not squash or rebase."
