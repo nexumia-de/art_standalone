@@ -550,7 +550,11 @@ public class WolfSSLImplementSSLSession implements SSLSession {
      * @param in timeout in seconds
      */
     protected void setNativeTimeout(long in) {
-        ssl.setSessTimeout(in);
+        try {
+            ssl.setSessTimeout(in);
+        } catch (IllegalStateException e) {
+            /* WOLFSSL freed on connection close */
+        }
     }
 
 
