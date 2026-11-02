@@ -1,0 +1,39 @@
+# Mirrors phosh and master to the owner's GitLab fork, so upstream
+# developers find this fork's work next to their project.
+# Needs the secret GITLAB_DEPLOY_KEY: private half of an SSH key whose
+# public half is a deploy key with write access on
+# gitlab.com/Xilance/art_standalone (see the PR that added this file).
+name: Mirror to GitLab
+
+on:
+  push:
+    branches: [phosh, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-gitlab
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Push phosh and master
+        env:
+          GITLAB_DEPLOY_KEY: ${{ secrets.GITLAB_DEPLOY_KEY }}
+        run: |
+          if [ -z "$GITLAB_DEPLOY_KEY" ]; then
+            echo "::warning::GITLAB_DEPLOY_KEY is not set, nothing mirrored"
+            exit 0
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$GITLAB_DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t ed25519 gitlab.com >> ~/.ssh/known_hosts
+          git clone --bare "https://github.com/${GITHUB_REPOSITORY}.git" repo.git
+          cd repo.git
+          git push git@gitlab.com:Xilance/art_standalone.git \
+            refs/heads/phosh:refs/heads/phosh refs/heads/master:refs/heads/master
