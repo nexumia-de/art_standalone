@@ -159,7 +159,12 @@ class OatFileAssistant {
   // After this call, no other methods of the OatFileAssistant should be
   // called, because access to the loaded oat file has been taken away from
   // the OatFileAssistant object.
-  std::unique_ptr<OatFile> GetBestOatFile();
+  //
+  // art_standalone compiles the dex file here if there is no usable oat file.
+  // With a context, dex2oat is told the class loader context the dex file is
+  // loaded in, so that the oat file is accepted even if a dex file earlier in
+  // the class path defines some of its classes.
+  std::unique_ptr<OatFile> GetBestOatFile(const ClassLoaderContext* context = nullptr);
 
   // Returns a human readable description of the status of the code for the
   // dex file. The returned description is for debugging purposes only.
