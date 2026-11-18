@@ -204,7 +204,7 @@ bool OatFileAssistant::IsUpToDate() {
   return GetBestInfo().Status() == kOatUpToDate;
 }
 
-std::unique_ptr<OatFile> OatFileAssistant::GetBestOatFile() {
+std::unique_ptr<OatFile> OatFileAssistant::GetBestOatFile(const ClassLoaderContext* context) {
   // framework-res.apk contains no dex files.
   bool is_framework_res = dex_location_.compare(dex_location_.size() - (sizeof("framework-res.apk")-1), sizeof("framework-res.apk")-1, "framework-res.apk") == 0;
   if (!IsUpToDate() && !is_framework_res) {
@@ -224,6 +224,14 @@ std::unique_ptr<OatFile> OatFileAssistant::GetBestOatFile() {
     }
 
     arg_vector.push_back(std::string("--boot-image=") + Runtime::Current()->GetImageLocation());
+
+    // Without it the oat file has no context, the runtime then looks for classes that
+    // an earlier dex file of the class loader defines too, and on the first one it drops
+    // the compiled code (ATL puts a jar that replaces some library classes before the app).
+    if (context != nullptr) {
+      arg_vector.push_back(std::string("--class-loader-context=") +
+                           context->EncodeContextForDex2oat(/*base_dir=*/ ""));
+    }
 
     std::string command_line(android::base::Join(arg_vector, ' '));
     LOG(INFO) << "Compiling dex file: " << command_line;

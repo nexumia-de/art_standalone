@@ -9142,7 +9142,7 @@ ObjPtr<mirror::MethodHandle> ClassLinker::ResolveMethodHandleForMethod(
   target_method->GetShorty(&shorty_length);
   int32_t num_params = static_cast<int32_t>(shorty_length + receiver_count - 1);
 
-  StackHandleScope<5> hs(self);
+  StackHandleScope<6> hs(self);
   ObjPtr<mirror::Class> array_of_class = GetClassRoot<mirror::ObjectArray<mirror::Class>>(this);
   Handle<mirror::ObjectArray<mirror::Class>> method_params(hs.NewHandle(
       mirror::ObjectArray<mirror::Class>::Alloc(self, array_of_class, num_params)));
@@ -9194,8 +9194,11 @@ ObjPtr<mirror::MethodHandle> ClassLinker::ResolveMethodHandleForMethod(
 
   if (UNLIKELY(handle_type == DexFile::MethodHandleType::kInvokeConstructor)) {
     Handle<mirror::Class> constructor_class = hs.NewHandle(target_method->GetDeclaringClass());
-    Handle<mirror::MethodHandlesLookup> lookup =
-        hs.NewHandle(mirror::MethodHandlesLookup::GetDefault(self));
+    // A lookup for the class that refers to the handle, made here. MethodHandles.lookup()
+    // refuses callers in java.*, which threw for a constructor reference in one of
+    // libcore's own lambdas, e.g. ArrayList::new in Collectors.toList().
+    Handle<mirror::MethodHandlesLookup> lookup = hs.NewHandle(
+        mirror::MethodHandlesLookup::Create(self, hs.NewHandle(referrer->GetDeclaringClass())));
     return lookup->FindConstructor(self, constructor_class, method_type);
   }
 
