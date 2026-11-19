@@ -25,6 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import libcore.io.IoUtils;
 import libcore.io.BufferIterator;
 import libcore.io.MemoryMappedFile;
 
@@ -72,6 +73,12 @@ public final class ZoneInfoDB {
      */
     private MemoryMappedFile mappedFile;
 
+    /**
+     * Set instead of {@code mappedFile} when the data comes from a directory of TZif files,
+     * one per time zone id, like the system's /usr/share/zoneinfo.
+     */
+    private String zoneInfoDir;
+
     private String version;
     private String zoneTab;
 
@@ -114,6 +121,13 @@ public final class ZoneInfoDB {
         }
       }
 
+      // No tzdata file, as on a Linux host: use the system's TZif files directly.
+      String tzDir = System.getenv("TZDIR");
+      TzData systemData = loadZoneInfoDir(tzDir != null ? tzDir : "/usr/share/zoneinfo");
+      if (systemData != null) {
+        return systemData;
+      }
+
       // We didn't find any usable tzdata on disk, so let's just hard-code knowledge of "GMT".
       // This is actually implemented in TimeZone itself, so if this is the only time zone
       // we report, we won't be asked any more questions.
@@ -131,6 +145,52 @@ public final class ZoneInfoDB {
         return tzData;
       }
       return null;
+    }
+
+    /**
+     * Uses a directory of TZif files (one file per time zone id) as the data source. Returns
+     * {@code null} if the directory has no time zones.
+     */
+    private static TzData loadZoneInfoDir(String dir) {
+      List<String> idList = new ArrayList<String>();
+      collectZoneIds(new File(dir), "", idList);
+      if (idList.isEmpty()) {
+        return null;
+      }
+      String[] ids = idList.toArray(new String[idList.size()]);
+      Arrays.sort(ids);
+
+      TzData tzData = new TzData();
+      tzData.zoneInfoDir = dir;
+      tzData.ids = ids;
+      tzData.version = "system";
+      try {
+        tzData.zoneTab = IoUtils.readFileAsString(dir + "/zone.tab");
+      } catch (IOException e) {
+        tzData.zoneTab = "";
+      }
+      return tzData;
+    }
+
+    private static void collectZoneIds(File dir, String prefix, List<String> ids) {
+      File[] files = dir.listFiles();
+      if (files == null) {
+        return;
+      }
+      for (File file : files) {
+        String name = file.getName();
+        // Skip the leap second variants and the text files (zone.tab, tzdata.zi, ...).
+        if (name.equals("posix") || name.equals("right") || name.indexOf('.') >= 0
+            || name.equals("leapseconds") || name.equals("SECURITY")) {
+          continue;
+        }
+        String id = prefix + name;
+        if (file.isDirectory()) {
+          collectZoneIds(file, id + "/", ids);
+        } else if (id.length() < SIZEOF_TZNAME) {
+          ids.add(id);
+        }
+      }
     }
 
     private static TzData createFallback() {
@@ -299,12 +359,38 @@ public final class ZoneInfoDB {
     }
 
     ZoneInfo makeTimeZoneUncached(String id) throws IOException {
+      if (zoneInfoDir != null) {
+        return makeTimeZoneFromZoneInfoDir(id);
+      }
       BufferIterator it = getBufferIterator(id);
       if (it == null) {
         return null;
       }
 
       return ZoneInfo.readTimeZone(id, it, System.currentTimeMillis());
+    }
+
+    private ZoneInfo makeTimeZoneFromZoneInfoDir(String id) throws IOException {
+      if (Arrays.binarySearch(ids, id) < 0) {
+        return null;
+      }
+      MemoryMappedFile file;
+      try {
+        file = MemoryMappedFile.mmapRO(zoneInfoDir + "/" + id);
+      } catch (ErrnoException e) {
+        return null;
+      }
+      try {
+        return ZoneInfo.readTimeZone(id, file.bigEndianIterator(), System.currentTimeMillis());
+      } catch (IOException | IndexOutOfBoundsException e) {
+        // Not a TZif file.
+        return null;
+      } finally {
+        try {
+          file.close();
+        } catch (ErrnoException ignored) {
+        }
+      }
     }
 
     public String[] getAvailableIDs() {
