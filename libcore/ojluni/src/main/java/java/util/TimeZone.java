@@ -41,6 +41,7 @@ package java.util;
 
 import org.apache.harmony.luni.internal.util.TimezoneGetter;
 import android.icu.text.TimeZoneNames;
+import java.io.File;
 import java.io.IOException;
 import java.io.Serializable;
 import java.time.ZoneId;
@@ -712,16 +713,33 @@ abstract public class TimeZone implements Serializable, Cloneable {
             if (zoneName == null || zoneName.isEmpty()) {
                 try {
                     // On the host, we can find the configured timezone here.
-                    zoneName = IoUtils.readFileAsString("/etc/timezone");
+                    zoneName = IoUtils.readFileAsString("/etc/timezone").trim();
                 } catch (IOException ex) {
-                    // "vogar --mode device" can end up here.
-                    // TODO: give libcore access to Android system properties and read "persist.sys.timezone".
-                    zoneName = "GMT";
+                    zoneName = getLocaltimeZoneName();
+                    if (zoneName == null) {
+                        // "vogar --mode device" can end up here.
+                        // TODO: give libcore access to Android system properties and read "persist.sys.timezone".
+                        zoneName = "GMT";
+                    }
                 }
             }
             defaultTimeZone = TimeZone.getTimeZone(zoneName);
         }
         return defaultTimeZone;
+    }
+
+    /**
+     * Returns the zone id from the /etc/localtime symlink (for example
+     * "../usr/share/zoneinfo/Europe/Berlin"), or null.
+     */
+    private static String getLocaltimeZoneName() {
+        try {
+            String target = new File("/etc/localtime").getCanonicalPath();
+            int index = target.indexOf("/zoneinfo/");
+            return index < 0 ? null : target.substring(index + "/zoneinfo/".length());
+        } catch (IOException ex) {
+            return null;
+        }
     }
 
     /**
