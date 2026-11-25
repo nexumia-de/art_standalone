@@ -19,8 +19,10 @@
 #include <sstream>
 
 #include <sys/stat.h>
+#include <unistd.h>
 #include "zlib.h"
 
+#include "android-base/file.h"
 #include "android-base/stringprintf.h"
 #include "android-base/strings.h"
 
@@ -207,7 +209,36 @@ bool OatFileAssistant::IsUpToDate() {
 std::unique_ptr<OatFile> OatFileAssistant::GetBestOatFile(const ClassLoaderContext* context) {
   // framework-res.apk contains no dex files.
   bool is_framework_res = dex_location_.compare(dex_location_.size() - (sizeof("framework-res.apk")-1), sizeof("framework-res.apk")-1, "framework-res.apk") == 0;
-  if (!IsUpToDate() && !is_framework_res) {
+  // Without classes*.dex (resource splits, jars whose dex was stripped after precompiling)
+  // dex2oat only fails with "No dex files"; it is started for nothing at every app start.
+  const std::vector<uint32_t>* checksums = GetRequiredDexChecksums();
+  bool has_dex = checksums != nullptr && has_original_dex_files_;
+  if (!IsUpToDate() && !is_framework_res && has_dex && GetBestInfo().Filename() != nullptr) {
+    // A dex file dex2oat failed on (it aborted on one of Duolingo's) would be compiled again,
+    // with a crash and a core dump, at every start of the app. Remember the failure for these
+    // dex checksums and this dex2oat; a changed dex file or compiler tries again.
+    std::string dex2oat_path(Runtime::Current()->GetCompilerExecutable());
+    struct stat dex2oat_stat;
+    std::string compiler_id = dex2oat_path;
+    if (stat(dex2oat_path.c_str(), &dex2oat_stat) == 0) {
+      compiler_id += android::base::StringPrintf(" %lld %lld",
+                                                 static_cast<long long>(dex2oat_stat.st_size),
+                                                 static_cast<long long>(dex2oat_stat.st_mtime));
+    }
+    std::string failure_key = compiler_id;
+    for (uint32_t checksum : *checksums) {
+      failure_key += android::base::StringPrintf(" %08x", checksum);
+    }
+    failure_key += "\n";
+    std::string failure_file = *GetBestInfo().Filename() + ".failed";
+    std::string earlier_failure;
+    if (android::base::ReadFileToString(failure_file, &earlier_failure) &&
+        earlier_failure == failure_key) {
+      LOG(INFO) << "Not compiling " << dex_location_ << ": dex2oat failed on it before ("
+                << failure_file << ")";
+      return GetBestInfo().ReleaseFileForUse();
+    }
+
     // Compile the dex file.
     std::vector<std::string> arg_vector;
 
@@ -236,10 +267,23 @@ std::unique_ptr<OatFile> OatFileAssistant::GetBestOatFile(const ClassLoaderConte
     std::string command_line(android::base::Join(arg_vector, ' '));
     LOG(INFO) << "Compiling dex file: " << command_line;
     std::string error_msg;
-    if (!Exec(arg_vector, &error_msg)) {
+    bool compiled = Exec(arg_vector, &error_msg);
+    if (!compiled) {
       LOG(WARNING) << "Failed to compile dex file " << dex_location_ << ": " << error_msg;
-    } else {
+      // Only verifying needs none of the optimizing compiler that failed, and still saves the
+      // verification at every start.
+      arg_vector.push_back("--compiler-filter=verify");
+      LOG(INFO) << "Verifying dex file only: " << android::base::Join(arg_vector, ' ');
+      compiled = Exec(arg_vector, &error_msg);
+      if (!compiled) {
+        LOG(WARNING) << "Failed to verify dex file " << dex_location_ << ": " << error_msg;
+      }
+    }
+    if (compiled) {
+      unlink(failure_file.c_str());
       GetBestInfo().Reset();
+    } else if (!android::base::WriteStringToFile(failure_key, failure_file)) {
+      PLOG(WARNING) << "Could not write " << failure_file;
     }
   }
   return GetBestInfo().ReleaseFileForUse();
