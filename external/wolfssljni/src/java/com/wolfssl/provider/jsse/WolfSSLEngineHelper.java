@@ -792,6 +792,17 @@ public class WolfSSLEngineHelper {
                  (err == WolfSSL.SSL_ERROR_WANT_READ ||
                   err == WolfSSL.SSL_ERROR_WANT_WRITE));
 
+        if (ret == WolfSSL.SSL_SUCCESS && this.clientMode &&
+                this.session != null) {
+            /* keep the server's certificates in the session while this
+             * connection still has them, see the session's peerCertificates */
+            try {
+                this.session.getPeerCertificates();
+            } catch (javax.net.ssl.SSLPeerUnverifiedException e) {
+                /* resumed session without a chain: keeps the earlier ones */
+            }
+        }
+
         return ret;
     }
 
