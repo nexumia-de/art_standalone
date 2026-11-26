@@ -68,6 +68,13 @@ public class WolfSSLImplementSSLSession implements SSLSession {
     private long sesPtr = 0;
     private String nullCipher = "SSL_NULL_WITH_NULL_NULL";
     private String nullProtocol = "NONE";
+    /* the peer's certificates from the last time they could be read. A
+     * session is shared by all connections to the same host and port, and
+     * resume() points it at the newest connection, whose handshake may not be
+     * done yet; a resumed TLS 1.3 session has no certificate chain either.
+     * Android keeps the certificates in the session, OkHttp's hostname check
+     * then aborted with "No peer certificate" (Bumble's api.cloud.bumble.com) */
+    private Certificate[] peerCertificates = null;
 
     /**
      * Create new WolfSSLImplementSSLSession
@@ -304,6 +311,9 @@ public class WolfSSLImplementSSLSession implements SSLSession {
         X509Certificate exportCert;
 
         if (ssl == null) {
+            if (peerCertificates != null) {
+                return peerCertificates.clone();
+            }
             throw new SSLPeerUnverifiedException("handshake not complete");
         }
 
@@ -318,6 +328,9 @@ public class WolfSSLImplementSSLSession implements SSLSession {
         }
         /* if no peer cert, throw SSLPeerUnverifiedException */
         if (numCerts == 0) {
+            if (peerCertificates != null) {
+                return peerCertificates.clone();
+            }
             throw new SSLPeerUnverifiedException("No peer certificate");
         }
         Certificate[] certs = new Certificate[numCerts];
@@ -375,6 +388,7 @@ public class WolfSSLImplementSSLSession implements SSLSession {
             certs[i] = exportCert;
         }
 
+        peerCertificates = certs.clone();
         return certs;
     }
 
